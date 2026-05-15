@@ -27,7 +27,7 @@ type Config struct {
 	} `yaml:"messages"`
 }
 
-// ADDED: default config content that will be auto-created.
+// ADDED: default config content written automatically when the file does not exist.
 const defaultConfig = `target-server: "lobby"
 
 messages:
@@ -39,41 +39,68 @@ messages:
   failed: "&cFailed to connect to &e%server%&c."
 `
 
-// ADDED: automatically creates plugin folder + config.yml if missing.
+// ADDED: returns all possible config locations we want to support.
+func configCandidates() []string {
+	candidates := []string{
+		filepath.Join("plugins", "pokehub", "config.yml"),
+	}
+
+	// ADDED: also try next to the executable, because some hosts run the binary from another cwd.
+	if exe, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exe)
+		candidates = append(candidates, filepath.Join(exeDir, "plugins", "pokehub", "config.yml"))
+	}
+
+	return candidates
+}
+
+// ADDED: create folder + config automatically if missing, then load the first usable config.
 func LoadConfig() (*Config, error) {
-	pluginDir := "plugins/pokehub"
-	configPath := filepath.Join(pluginDir, "config.yml")
+	candidates := configCandidates()
 
-	// ADDED: auto-create plugin directory.
-	if err := os.MkdirAll(pluginDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create plugin directory: %w", err)
-	}
+	var lastErr error
 
-	// ADDED: auto-create config.yml if it doesn't exist.
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		if err := os.WriteFile(configPath, []byte(defaultConfig), 0644); err != nil {
-			return nil, fmt.Errorf("failed to create default config: %w", err)
+	for _, configPath := range candidates {
+		dir := filepath.Dir(configPath)
+
+		// ADDED: create the plugin folder automatically.
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			lastErr = fmt.Errorf("failed to create config directory %q: %w", dir, err)
+			continue
 		}
+
+		// ADDED: create default config if missing.
+		if _, err := os.Stat(configPath); os.IsNotExist(err) {
+			if err := os.WriteFile(configPath, []byte(defaultConfig), 0644); err != nil {
+				lastErr = fmt.Errorf("failed to create default config %q: %w", configPath, err)
+				continue
+			}
+		}
+
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			lastErr = fmt.Errorf("failed to read config %q: %w", configPath, err)
+			continue
+		}
+
+		cfg := &Config{}
+		if err := yaml.Unmarshal(data, cfg); err != nil {
+			lastErr = fmt.Errorf("failed to parse config %q: %w", configPath, err)
+			continue
+		}
+
+		cfg.TargetServer = strings.TrimSpace(cfg.TargetServer)
+		return cfg, nil
 	}
 
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return nil, err
+	if lastErr == nil {
+		lastErr = fmt.Errorf("unable to locate a writable config path")
 	}
-
-	cfg := &Config{}
-	if err := yaml.Unmarshal(data, cfg); err != nil {
-		return nil, err
-	}
-
-	cfg.TargetServer = strings.TrimSpace(cfg.TargetServer)
-
-	return cfg, nil
+	return nil, lastErr
 }
 
 var Plugin = proxy.Plugin{
 	Name: "PokeHub",
-
 	Init: func(ctx context.Context, prx *proxy.Proxy) error {
 		cfg, err := LoadConfig()
 		if err != nil {
@@ -85,7 +112,6 @@ var Plugin = proxy.Plugin{
 		registerHubCommand := func(name string) {
 			prx.Command().Register(
 				brigodier.Literal(name).Executes(command.Command(func(c *command.Context) error {
-
 					player, ok := c.Source.(proxy.Player)
 					if !ok {
 						return c.Source.SendMessage(&component.Text{
@@ -103,53 +129,33 @@ var Plugin = proxy.Plugin{
 					if target == nil {
 						return player.SendMessage(&component.Text{
 							Content: replaceColor(
-								strings.ReplaceAll(
-									cfg.Messages.TargetMissing,
-									"%server%",
-									cfg.TargetServer,
-								),
+								strings.ReplaceAll(cfg.Messages.TargetMissing, "%server%", cfg.TargetServer),
 							),
 						})
 					}
 
-					// ADDED: prevent reconnecting to same server.
+					// ADDED: do nothing if the player is already on the target server.
 					if player.CurrentServer() != nil &&
 						player.CurrentServer().Server() != nil &&
 						player.CurrentServer().Server().ServerInfo().Name() == target.ServerInfo().Name() {
-
 						return player.SendMessage(&component.Text{
 							Content: replaceColor(
-								strings.ReplaceAll(
-									cfg.Messages.AlreadyThere,
-									"%server%",
-									cfg.TargetServer,
-								),
+								strings.ReplaceAll(cfg.Messages.AlreadyThere, "%server%", cfg.TargetServer),
 							),
 						})
 					}
 
 					_ = player.SendMessage(&component.Text{
 						Content: replaceColor(
-							strings.ReplaceAll(
-								cfg.Messages.Transferring,
-								"%server%",
-								cfg.TargetServer,
-							),
+							strings.ReplaceAll(cfg.Messages.Transferring, "%server%", cfg.TargetServer),
 						),
 					})
 
-					// ADDED: switch player to configured server.
-					ok = player.CreateConnectionRequest(target).
-						ConnectWithIndication(player.Context())
-
+					ok = player.CreateConnectionRequest(target).ConnectWithIndication(player.Context())
 					if ok {
 						_ = player.SendMessage(&component.Text{
 							Content: replaceColor(
-								strings.ReplaceAll(
-									cfg.Messages.Transferred,
-									"%server%",
-									cfg.TargetServer,
-								),
+								strings.ReplaceAll(cfg.Messages.Transferred, "%server%", cfg.TargetServer),
 							),
 						})
 						return nil
@@ -157,23 +163,17 @@ var Plugin = proxy.Plugin{
 
 					return player.SendMessage(&component.Text{
 						Content: replaceColor(
-							strings.ReplaceAll(
-								cfg.Messages.Failed,
-								"%server%",
-								cfg.TargetServer,
-							),
+							strings.ReplaceAll(cfg.Messages.Failed, "%server%", cfg.TargetServer),
 						),
 					})
 				})),
 			)
 		}
 
-		// ADDED: register both commands.
 		registerHubCommand("hub")
 		registerHubCommand("lobby")
 
 		log.Info("PokeHub loaded", "target-server", cfg.TargetServer)
-
 		return nil
 	},
 }
