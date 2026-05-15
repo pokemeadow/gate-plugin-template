@@ -13,9 +13,7 @@ import (
 
 func main() {
 	proxy.Plugins = append(proxy.Plugins,
-		tablist.Plugin,
 		globalchat.Plugin,
-		bossbar.Plugin,
 		ping.Plugin,
 		titlecmd.Plugin,
 		cloversecurity.Plugin,
