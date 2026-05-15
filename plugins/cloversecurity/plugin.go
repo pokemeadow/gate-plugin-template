@@ -7,14 +7,14 @@ import (
 	"strings"
 	"sync"
 
-	"com.google.common.io.ByteArrayDataInput"
-	"com.google.common.io.ByteStreams"
 	"github.com/robinbraemer/event"
 	"go.minekube.com/brigodier"
 	"go.minekube.com/common/minecraft/component"
 	"go.minekube.com/gate/pkg/command"
 	"go.minekube.com/gate/pkg/edition/java/proxy"
+	"go.minekube.com/gate/pkg/edition/java/proxy/message"
 	"gopkg.in/yaml.v3"
+	"go.minekube.com/gate/pkg/util/uuid"
 )
 
 type Config struct {
@@ -72,6 +72,22 @@ func (m *AuthManager) Remove(name string) {
 	delete(m.auth, name)
 }
 
+// readUTF reads a Java modified UTF-8 string from the byte slice at the given offset.
+// Returns the string and the new offset (number of bytes consumed).
+func readUTF(data []byte, offset int) (string, int, error) {
+	if offset+2 > len(data) {
+		return "", offset, fmt.Errorf("not enough bytes for length")
+	}
+	length := int(data[offset])<<8 | int(data[offset+1])
+	offset += 2
+	if offset+length > len(data) {
+		return "", offset, fmt.Errorf("not enough bytes for string data")
+	}
+	str := string(data[offset : offset+length])
+	offset += length
+	return str, offset, nil
+}
+
 var Plugin = proxy.Plugin{
 	Name: "CloverSecurity",
 	Init: func(ctx context.Context, prx *proxy.Proxy) error {
@@ -82,7 +98,7 @@ var Plugin = proxy.Plugin{
 
 		authMgr := NewAuthManager()
 
-		// LoginEvent: Auth সার্ভার চেক
+		// LoginEvent – Auth সার্ভার চেক
 		event.Subscribe(prx.Event(), 0, func(e *proxy.LoginEvent) {
 			authSrv := prx.Server(cfg.AuthServer)
 			if authSrv == nil {
@@ -93,7 +109,7 @@ var Plugin = proxy.Plugin{
 			e.Allow()
 		})
 
-		// ServerPreConnectEvent: আনঅথ প্লেয়ারকে Auth-এ ফোর্স, অথ প্লেয়ারকে Auth-এ ব্লক
+		// ServerPreConnectEvent – আনঅথ প্লেয়ারকে Auth-এ ফোর্স, অথ প্লেয়ারকে Auth-এ ব্লক
 		event.Subscribe(prx.Event(), 0, func(e *proxy.ServerPreConnectEvent) {
 			player := e.Player()
 			target := e.Server()
@@ -120,25 +136,40 @@ var Plugin = proxy.Plugin{
 			}
 		})
 
-		// PluginMessageEvent: Spigot থেকে auth_success মেসেজ ধরা
+		// PluginMessageEvent – Spigot থেকে auth_success মেসেজ ধরা
 		event.Subscribe(prx.Event(), 0, func(e *proxy.PluginMessageEvent) {
 			// সঠিক চ্যানেল চেক
-			if !strings.EqualFold(e.Identifier().String(), "clover:auth") {
+			if !e.Identifier().Equals(message.MinecraftChannelIdentifier.Create("clover", "auth")) {
 				return
 			}
 
 			data := e.Data()
-			if len(data) < 3 {
+			if len(data) < 2 {
 				return
 			}
 
-			in := ByteStreams.newDataInput(data)
-			subChannel := in.readUTF()
-			if !strings.EqualFold(subChannel, "auth_success") {
+			// Spigot ফরম্যাট: writeUTF("auth_success"), writeUTF(playerUUID)
+			offset := 0
+			subChannel, newOffset, err := readUTF(data, offset)
+			if err != nil {
+				return
+			}
+			offset = newOffset
+
+			if subChannel != "auth_success" {
 				return
 			}
 
-			playerUUID := in.readUTF()
+			playerUUIDStr, _, err := readUTF(data, offset)
+			if err != nil {
+				return
+			}
+
+			playerUUID, err := uuid.Parse(playerUUIDStr)
+			if err != nil {
+				return
+			}
+
 			player := prx.PlayerByUUID(playerUUID)
 			if player == nil {
 				return
@@ -166,7 +197,7 @@ var Plugin = proxy.Plugin{
 			_ = player.SendMessage(&component.Text{Content: "§cNo lobby or fallback server is available."})
 		})
 
-		// DisconnectEvent: ক্লিনআপ
+		// DisconnectEvent – ক্লিনআপ
 		event.Subscribe(prx.Event(), 0, func(e *proxy.DisconnectEvent) {
 			authMgr.Remove(e.Player().Username())
 		})
