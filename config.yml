@@ -140,15 +140,9 @@ config:
     port: 25577
     showPlugins: false
   auth:
-<<<<<<< HEAD
   # Customize the base URL for the Mojang session server to authenticate online mode players using different authentication servers.
   # Defaults to https://sessionserver.mojang.com/session/minecraft/hasJoined
   #sessionServerUrl: https://example.com/mitm/session/minecraft/hasJoined
-=======
-    # Customize the base URL for the Mojang session server to authenticate online mode players using different authentication servers.
-    # Defaults to https://sessionserver.mojang.com/session/minecraft/hasJoined
-    #sessionServerUrl: https://example.com/mitm/session/minecraft/hasJoined
->>>>>>> 0d2a5f21de4617318b1076ae9300486cd9e39b76
 
   # Lite mode is a lightweight reverse proxy mode that acts as thin layer between the client and the backend server.
   # Full documentation: https://gate.minekube.com/guide/lite
@@ -410,8 +404,4 @@ api:
   enabled: false
   # The bind address to listen for API connections.
   # Default: localhost:8080
-<<<<<<< HEAD
   bind: localhost:8080
-=======
-  bind: localhost:8080
->>>>>>> 0d2a5f21de4617318b1076ae9300486cd9e39b76
