@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 
+	"com.google.common.io.ByteArrayDataInput"
+	"com.google.common.io.ByteStreams"
 	"github.com/robinbraemer/event"
 	"go.minekube.com/brigodier"
 	"go.minekube.com/common/minecraft/component"
@@ -32,12 +34,10 @@ func LoadConfig(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	cfg := &Config{}
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, err
 	}
-
 	return cfg, nil
 }
 
@@ -59,12 +59,11 @@ func (m *AuthManager) IsAuthenticated(name string) bool {
 func (m *AuthManager) SetAuthenticated(name string, val bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
 	if val {
 		m.auth[name] = true
-		return
+	} else {
+		delete(m.auth, name)
 	}
-	delete(m.auth, name)
 }
 
 func (m *AuthManager) Remove(name string) {
@@ -83,17 +82,18 @@ var Plugin = proxy.Plugin{
 
 		authMgr := NewAuthManager()
 
+		// LoginEvent: Auth সার্ভার চেক
 		event.Subscribe(prx.Event(), 0, func(e *proxy.LoginEvent) {
 			authSrv := prx.Server(cfg.AuthServer)
 			if authSrv == nil {
 				e.Deny(&component.Text{Content: replaceColor(cfg.Messages.AuthOffline)})
 				return
 			}
-
 			authMgr.SetAuthenticated(e.Player().Username(), false)
 			e.Allow()
 		})
 
+		// ServerPreConnectEvent: আনঅথ প্লেয়ারকে Auth-এ ফোর্স, অথ প্লেয়ারকে Auth-এ ব্লক
 		event.Subscribe(prx.Event(), 0, func(e *proxy.ServerPreConnectEvent) {
 			player := e.Player()
 			target := e.Server()
@@ -120,30 +120,37 @@ var Plugin = proxy.Plugin{
 			}
 		})
 
+		// PluginMessageEvent: Spigot থেকে auth_success মেসেজ ধরা
 		event.Subscribe(prx.Event(), 0, func(e *proxy.PluginMessageEvent) {
-			if !strings.EqualFold(fmt.Sprint(e.Identifier()), "clover:auth") {
+			// সঠিক চ্যানেল চেক
+			if !strings.EqualFold(e.Identifier().String(), "clover:auth") {
 				return
 			}
 
 			data := e.Data()
-			if len(data) < 2 || data[0] != 0 {
+			if len(data) < 3 {
 				return
 			}
 
-			playerName := string(data[1:])
-			player := prx.PlayerByName(playerName)
+			in := ByteStreams.newDataInput(data)
+			subChannel := in.readUTF()
+			if !strings.EqualFold(subChannel, "auth_success") {
+				return
+			}
+
+			playerUUID := in.readUTF()
+			player := prx.PlayerByUUID(playerUUID)
 			if player == nil {
 				return
 			}
 
-			authMgr.SetAuthenticated(playerName, true)
+			authMgr.SetAuthenticated(player.Username(), true)
 
+			// লবি বা ফলব্যাকে পাঠানো
 			targets := make([]proxy.RegisteredServer, 0, 1+len(cfg.FallbackServers))
-
 			if lobby := prx.Server(cfg.LobbyServer); lobby != nil {
 				targets = append(targets, lobby)
 			}
-
 			for _, name := range cfg.FallbackServers {
 				if srv := prx.Server(name); srv != nil {
 					targets = append(targets, srv)
@@ -156,14 +163,15 @@ var Plugin = proxy.Plugin{
 					return
 				}
 			}
-
 			_ = player.SendMessage(&component.Text{Content: "§cNo lobby or fallback server is available."})
 		})
 
+		// DisconnectEvent: ক্লিনআপ
 		event.Subscribe(prx.Event(), 0, func(e *proxy.DisconnectEvent) {
 			authMgr.Remove(e.Player().Username())
 		})
 
+		// /csv reload কমান্ড
 		cmd := brigodier.Literal("csv").
 			Requires(command.Requires(func(c *command.RequiresContext) bool {
 				return c.Source.HasPermission("cloversecurity.reload")
@@ -174,12 +182,10 @@ var Plugin = proxy.Plugin{
 					_ = c.Source.SendMessage(&component.Text{Content: "§cFailed to reload configuration!"})
 					return err
 				}
-
 				cfg = newCfg
 				_ = c.Source.SendMessage(&component.Text{Content: "§aConfiguration reloaded successfully."})
 				return nil
 			}))
-
 		prx.Command().Register(cmd)
 
 		return nil
