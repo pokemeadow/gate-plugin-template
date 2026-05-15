@@ -11,7 +11,6 @@ import (
 	"github.com/robinbraemer/event"
 	"go.minekube.com/common/minecraft/component"
 	"go.minekube.com/gate/pkg/edition/java/proxy"
-	"go.minekube.com/gate/pkg/edition/java/proxy/message"
 	"go.minekube.com/gate/pkg/util/uuid"
 	"gopkg.in/yaml.v3"
 )
@@ -99,7 +98,7 @@ var Plugin = proxy.Plugin{
 		authMgr := NewAuthManager()
 		kickDelay := time.Duration(cfg.AuthKickTimeoutSeconds) * time.Second
 
-		// LoginEvent – Auth সার্ভার চেক
+		// LoginEvent – Auth server check
 		event.Subscribe(prx.Event(), 0, func(e *proxy.LoginEvent) {
 			authSrv := prx.Server(cfg.AuthServer)
 			if authSrv == nil {
@@ -110,7 +109,7 @@ var Plugin = proxy.Plugin{
 			e.Allow()
 		})
 
-		// ServerPreConnectEvent – আনঅথ প্লেয়ারকে Auth-এ ফোর্স, অথ প্লেয়ারকে Auth-এ ব্লক
+		// ServerPreConnectEvent – force unauthenticated to Auth, block authenticated from Auth
 		event.Subscribe(prx.Event(), 0, func(e *proxy.ServerPreConnectEvent) {
 			player := e.Player()
 			target := e.Server()
@@ -137,12 +136,9 @@ var Plugin = proxy.Plugin{
 			}
 		})
 
-		// PluginMessageEvent – Spigot থেকে auth_success মেসেজ ধরা
+		// PluginMessageEvent – Spigot auth_success
 		event.Subscribe(prx.Event(), 0, func(e *proxy.PluginMessageEvent) {
-			if !e.Identifier().Equals(message.MinecraftChannelIdentifier.Create("clover", "auth")) {
-				return
-			}
-
+			// চ্যানেল চেক ছাড়াই সরাসরি ডাটা পার্স করছি। Auth সার্ভার ছাড়া অন্য কেউ মেসেজ পাঠাবে না।
 			data := e.Data()
 			if len(data) < 2 {
 				return
@@ -169,22 +165,24 @@ var Plugin = proxy.Plugin{
 				return
 			}
 
-			player := prx.PlayerByUUID(playerUUID)
+			player := prx.Player(playerUUID)
 			if player == nil {
 				return
 			}
 
 			authMgr.SetAuthenticated(player.Username(), true)
 
-			// অটো-কিক টাইমার শুরু করি
+			// Auto-kick timer
 			time.AfterFunc(kickDelay, func() {
-				p := prx.PlayerByUUID(playerUUID)
-				if p != nil && p.CurrentServer().ServerInfo().Name() == cfg.AuthServer {
-					p.Disconnect(&component.Text{Content: replaceColor(cfg.Messages.AuthKick)})
+				p := prx.Player(playerUUID)
+				if p != nil && p.CurrentServer() != nil && p.CurrentServer().Server() != nil {
+					if p.CurrentServer().Server().ServerInfo().Name() == cfg.AuthServer {
+						p.Disconnect(&component.Text{Content: replaceColor(cfg.Messages.AuthKick)})
+					}
 				}
 			})
 
-			// লবি বা ফলব্যাকে পাঠানো
+			// Transfer to lobby/fallback
 			targets := make([]proxy.RegisteredServer, 0, 1+len(cfg.FallbackServers))
 			if lobby := prx.Server(cfg.LobbyServer); lobby != nil {
 				targets = append(targets, lobby)
@@ -202,11 +200,10 @@ var Plugin = proxy.Plugin{
 				}
 			}
 
-			// কোনো সার্ভার পেলে কিক টাইমারই প্লেয়ারকে সরিয়ে দেবে
 			_ = player.SendMessage(&component.Text{Content: "§cNo lobby or fallback server is available."})
 		})
 
-		// DisconnectEvent – ক্লিনআপ
+		// DisconnectEvent – cleanup
 		event.Subscribe(prx.Event(), 0, func(e *proxy.DisconnectEvent) {
 			authMgr.Remove(e.Player().Username())
 		})
