@@ -1,11 +1,10 @@
 # CloverSecurity Gate Plugin Configuration
 auth-server: "auth"
-lobby-server: "Lobby"
+lobby-server: "lobby"
 fallback-servers:
-  - "Survival"
-  - "Creative"
+  - "survival"
+  - "creative"
 
-# প্লেয়ার অথেন্টিকেটেড হওয়ার পর এই সময়ের (সেকেন্ড) মধ্যে লবিতে যেতে না পারলে কিক হবে
 auth-kick-timeout-seconds: 15
 
 messages:

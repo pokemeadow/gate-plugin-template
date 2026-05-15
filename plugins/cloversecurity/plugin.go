@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/robinbraemer/event"
 	"go.minekube.com/common/minecraft/component"
 	"go.minekube.com/gate/pkg/edition/java/proxy"
@@ -19,7 +20,7 @@ type Config struct {
 	AuthServer             string   `yaml:"auth-server"`
 	LobbyServer            string   `yaml:"lobby-server"`
 	FallbackServers        []string `yaml:"fallback-servers"`
-	AuthKickTimeoutSeconds int      `yaml:"auth-kick-timeout-seconds"`
+	AuthKickTimeoutSeconds  int     `yaml:"auth-kick-timeout-seconds"`
 	Messages               struct {
 		AuthOffline  string `yaml:"auth-offline"`
 		NoAuthAccess string `yaml:"no-auth-access"`
@@ -43,45 +44,58 @@ func LoadConfig(path string) (*Config, error) {
 
 type AuthManager struct {
 	mu   sync.RWMutex
-	auth map[string]bool
+	auth map[uuid.UUID]bool
 }
 
 func NewAuthManager() *AuthManager {
-	return &AuthManager{auth: make(map[string]bool)}
+	return &AuthManager{auth: make(map[uuid.UUID]bool)}
 }
 
-func (m *AuthManager) IsAuthenticated(name string) bool {
+func (m *AuthManager) IsAuthenticated(id uuid.UUID) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	return m.auth[name]
+	return m.auth[id]
 }
 
-func (m *AuthManager) SetAuthenticated(name string, val bool) {
+func (m *AuthManager) SetAuthenticated(id uuid.UUID, val bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
 	if val {
-		m.auth[name] = true
+		m.auth[id] = true
 	} else {
-		delete(m.auth, name)
+		delete(m.auth, id)
 	}
 }
 
-func (m *AuthManager) Remove(name string) {
+func (m *AuthManager) Remove(id uuid.UUID) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.auth, name)
+	delete(m.auth, id)
 }
 
-// readUTF reads a Java modified UTF-8 string from the byte slice at the given offset.
+// ADDED: custom channel identifier that matches Gate's ChannelIdentifier interface.
+type authChannelID string
+
+// ADDED: current Gate API expects an ID() method on channel identifiers.
+func (a authChannelID) ID() string { return string(a) }
+
+// ADDED: String() is extra-safe if your Gate build also uses String() internally.
+func (a authChannelID) String() string { return string(a) }
+
+// readUTF reads a Java DataOutputStream.writeUTF string from the byte slice at the given offset.
 func readUTF(data []byte, offset int) (string, int, error) {
 	if offset+2 > len(data) {
 		return "", offset, fmt.Errorf("not enough bytes for length")
 	}
+
 	length := int(data[offset])<<8 | int(data[offset+1])
 	offset += 2
+
 	if offset+length > len(data) {
 		return "", offset, fmt.Errorf("not enough bytes for string data")
 	}
+
 	str := string(data[offset : offset+length])
 	offset += length
 	return str, offset, nil
@@ -95,21 +109,28 @@ var Plugin = proxy.Plugin{
 			return fmt.Errorf("failed to load config: %w", err)
 		}
 
+		// ADDED: Gate docs recommend logger from context.
+		log := logr.FromContextOrDiscard(ctx).WithName("CloverSecurity")
+
 		authMgr := NewAuthManager()
 		kickDelay := time.Duration(cfg.AuthKickTimeoutSeconds) * time.Second
 
-		// LoginEvent – Auth server check
+		// ADDED: register our plugin channel with the proxy.
+		authChannel := authChannelID("clover:auth")
+		prx.ChannelRegistrar().Register(authChannel)
+
 		event.Subscribe(prx.Event(), 0, func(e *proxy.LoginEvent) {
 			authSrv := prx.Server(cfg.AuthServer)
 			if authSrv == nil {
 				e.Deny(&component.Text{Content: replaceColor(cfg.Messages.AuthOffline)})
 				return
 			}
-			authMgr.SetAuthenticated(e.Player().Username(), false)
+
+			// CHANGED: track auth by UUID, not username.
+			authMgr.SetAuthenticated(e.Player().ID(), false)
 			e.Allow()
 		})
 
-		// ServerPreConnectEvent – force unauthenticated to Auth, block authenticated from Auth
 		event.Subscribe(prx.Event(), 0, func(e *proxy.ServerPreConnectEvent) {
 			player := e.Player()
 			target := e.Server()
@@ -122,7 +143,8 @@ var Plugin = proxy.Plugin{
 			targetName := target.ServerInfo().Name()
 			authName := authSrv.ServerInfo().Name()
 
-			if !authMgr.IsAuthenticated(player.Username()) {
+			// CHANGED: UUID-based auth check.
+			if !authMgr.IsAuthenticated(player.ID()) {
 				if targetName != authName {
 					e.Allow(authSrv)
 					_ = player.SendMessage(&component.Text{Content: replaceColor(cfg.Messages.NoAuthAccess)})
@@ -136,9 +158,12 @@ var Plugin = proxy.Plugin{
 			}
 		})
 
-		// PluginMessageEvent – Spigot auth_success
 		event.Subscribe(prx.Event(), 0, func(e *proxy.PluginMessageEvent) {
-			// চ্যানেল চেক ছাড়াই সরাসরি ডাটা পার্স করছি। Auth সার্ভার ছাড়া অন্য কেউ মেসেজ পাঠাবে না।
+			// CHANGED: use ID(), not String().
+			if e.Identifier().ID() != "clover:auth" {
+				return
+			}
+
 			data := e.Data()
 			if len(data) < 2 {
 				return
@@ -157,22 +182,27 @@ var Plugin = proxy.Plugin{
 
 			playerUUIDStr, _, err := readUTF(data, offset)
 			if err != nil {
+				log.Error(err, "failed to read UUID from auth_success message")
 				return
 			}
 
 			playerUUID, err := uuid.Parse(playerUUIDStr)
 			if err != nil {
+				log.Error(err, "failed to parse player UUID")
 				return
 			}
 
 			player := prx.Player(playerUUID)
 			if player == nil {
+				log.Info("auth_success received but player is not online", "uuid", playerUUIDStr)
 				return
 			}
 
-			authMgr.SetAuthenticated(player.Username(), true)
+			// CHANGED: store auth by UUID.
+			authMgr.SetAuthenticated(playerUUID, true)
+			log.Info("player authenticated", "player", player.Username(), "uuid", playerUUIDStr)
 
-			// Auto-kick timer
+			// ADDED: kick timer only if the player is still stuck on auth.
 			time.AfterFunc(kickDelay, func() {
 				p := prx.Player(playerUUID)
 				if p != nil && p.CurrentServer() != nil && p.CurrentServer().Server() != nil {
@@ -182,30 +212,42 @@ var Plugin = proxy.Plugin{
 				}
 			})
 
-			// Transfer to lobby/fallback
 			targets := make([]proxy.RegisteredServer, 0, 1+len(cfg.FallbackServers))
+
 			if lobby := prx.Server(cfg.LobbyServer); lobby != nil {
 				targets = append(targets, lobby)
+			} else {
+				log.Info("lobby server not found", "name", cfg.LobbyServer)
 			}
+
 			for _, name := range cfg.FallbackServers {
 				if srv := prx.Server(name); srv != nil {
 					targets = append(targets, srv)
+				} else {
+					log.Info("fallback server not found", "name", name)
 				}
 			}
 
+			if len(targets) == 0 {
+				_ = player.SendMessage(&component.Text{Content: "§cNo lobby or fallback server is available."})
+				return
+			}
+
+			// ADDED: use player context so the transfer cancels if the player disconnects.
+			switchCtx := player.Context()
+
 			for _, target := range targets {
-				if player.CreateConnectionRequest(target).ConnectWithIndication(ctx) {
+				if player.CreateConnectionRequest(target).ConnectWithIndication(switchCtx) {
 					_ = player.SendMessage(&component.Text{Content: replaceColor(cfg.Messages.Transferred)})
 					return
 				}
 			}
 
-			_ = player.SendMessage(&component.Text{Content: "§cNo lobby or fallback server is available."})
+			_ = player.SendMessage(&component.Text{Content: "§cFailed to connect to lobby or fallback servers."})
 		})
 
-		// DisconnectEvent – cleanup
 		event.Subscribe(prx.Event(), 0, func(e *proxy.DisconnectEvent) {
-			authMgr.Remove(e.Player().Username())
+			authMgr.Remove(e.Player().ID())
 		})
 
 		return nil
