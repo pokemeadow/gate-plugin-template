@@ -1,0 +1,31 @@
+name: Build Gate Proxy
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [created]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24' # go.mod অনুযায়ী সর্বোচ্চ
+      - name: Build
+        run: GOOS=linux GOARCH=${{ matrix.arch }} go build -o gate-linux-${{ matrix.arch }} .
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-linux-${{ matrix.arch }}
+          path: gate-linux-${{ matrix.arch }}
+      - name: Upload to Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: gate-linux-*
