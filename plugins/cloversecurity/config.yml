@@ -1,91 +1,16 @@
-# ============================================================
-# CloverSecurity Configuration
-# ============================================================
-#
-# Plugin: CloverSecurity
-# Platform: Gate Proxy
-# Author: Poke Meadows
-# Version: 1.0.0
-#
-# Description:
-# CloverSecurity is an authentication protection system
-# for Gate Proxy networks. Players must authenticate
-# through the Auth server before accessing other servers.
-#
-# ============================================================
-
-# ============================================================
-# Server Configuration
-# ============================================================
-#
-# These server names MUST match the names defined
-# inside your main Gate config.yml file.
-#
-# Example:
-#
-# servers:
-#   Auth:
-#   Lobby:
-#   Survival:
-#
-# ============================================================
-
-# Authentication server
-# Players will join here first to register/login.
+# CloverSecurity Gate Plugin Configuration
 auth-server: "auth"
-
-# Main lobby server
-# Players are sent here after successful authentication.
-lobby-server: "lobby"
-
-# Backup servers
-# Used if the lobby server is unavailable.
+lobby-server: "Lobby"
 fallback-servers:
-  - "Lobby"
   - "Survival"
   - "Creative"
-  - "KitPvP"
 
-# ============================================================
-# Messages
-# ============================================================
-#
-# You can use Minecraft color codes:
-#
-# &0 = Black
-# &1 = Dark Blue
-# &2 = Dark Green
-# &3 = Dark Aqua
-# &4 = Dark Red
-# &5 = Dark Purple
-# &6 = Gold
-# &7 = Gray
-# &8 = Dark Gray
-# &9 = Blue
-# &a = Green
-# &b = Aqua
-# &c = Red
-# &d = Light Purple
-# &e = Yellow
-# &f = White
-# &l = Bold
-# &n = Underline
-#
-# ============================================================
+# প্লেয়ার অথেন্টিকেটেড হওয়ার পর এই সময়ের (সেকেন্ড) মধ্যে লবিতে যেতে না পারলে কিক হবে
+auth-kick-timeout-seconds: 15
 
 messages:
-
-  # Sent when the Auth server is offline.
-  auth-offline: "&c[CloverSecurity] &4Authentication server is currently offline. Please try again later."
-
-  # Sent when an unauthenticated player tries
-  # to access another server.
-  no-auth-access: "&e[CloverSecurity] &6Please authenticate first using &l/register &6or &l/login"
-
-  # Sent when an authenticated player attempts
-  # to reconnect to the Auth server.
-  auth-blocked: "&c[CloverSecurity] &4You are already authenticated. Access to the Auth server is blocked."
-
-  # Sent after successful authentication
-  # before transferring the player.
-  transferred: "&a[CloverSecurity] &2Authentication successful! Connecting you to the network..."
+  auth-offline: "&cAuthentication server is offline. Please try again later."
+  no-auth-access: "&ePlease authenticate first using /register or /login."
+  auth-blocked: "&cYou are already authenticated. Access to Auth server blocked."
+  transferred: "&aSuccessfully transferred to the lobby."
+  auth-kick: "&cFailed to transfer to lobby. Please reconnect."

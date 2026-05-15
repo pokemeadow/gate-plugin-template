@@ -6,26 +6,27 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/robinbraemer/event"
-	"go.minekube.com/brigodier"
 	"go.minekube.com/common/minecraft/component"
-	"go.minekube.com/gate/pkg/command"
 	"go.minekube.com/gate/pkg/edition/java/proxy"
 	"go.minekube.com/gate/pkg/edition/java/proxy/message"
-	"gopkg.in/yaml.v3"
 	"go.minekube.com/gate/pkg/util/uuid"
+	"gopkg.in/yaml.v3"
 )
 
 type Config struct {
-	AuthServer      string   `yaml:"auth-server"`
-	LobbyServer     string   `yaml:"lobby-server"`
-	FallbackServers []string `yaml:"fallback-servers"`
-	Messages        struct {
+	AuthServer             string   `yaml:"auth-server"`
+	LobbyServer            string   `yaml:"lobby-server"`
+	FallbackServers        []string `yaml:"fallback-servers"`
+	AuthKickTimeoutSeconds int      `yaml:"auth-kick-timeout-seconds"`
+	Messages               struct {
 		AuthOffline  string `yaml:"auth-offline"`
 		NoAuthAccess string `yaml:"no-auth-access"`
 		AuthBlocked  string `yaml:"auth-blocked"`
 		Transferred  string `yaml:"transferred"`
+		AuthKick     string `yaml:"auth-kick"`
 	} `yaml:"messages"`
 }
 
@@ -73,7 +74,6 @@ func (m *AuthManager) Remove(name string) {
 }
 
 // readUTF reads a Java modified UTF-8 string from the byte slice at the given offset.
-// Returns the string and the new offset (number of bytes consumed).
 func readUTF(data []byte, offset int) (string, int, error) {
 	if offset+2 > len(data) {
 		return "", offset, fmt.Errorf("not enough bytes for length")
@@ -97,6 +97,7 @@ var Plugin = proxy.Plugin{
 		}
 
 		authMgr := NewAuthManager()
+		kickDelay := time.Duration(cfg.AuthKickTimeoutSeconds) * time.Second
 
 		// LoginEvent – Auth সার্ভার চেক
 		event.Subscribe(prx.Event(), 0, func(e *proxy.LoginEvent) {
@@ -138,7 +139,6 @@ var Plugin = proxy.Plugin{
 
 		// PluginMessageEvent – Spigot থেকে auth_success মেসেজ ধরা
 		event.Subscribe(prx.Event(), 0, func(e *proxy.PluginMessageEvent) {
-			// সঠিক চ্যানেল চেক
 			if !e.Identifier().Equals(message.MinecraftChannelIdentifier.Create("clover", "auth")) {
 				return
 			}
@@ -148,7 +148,6 @@ var Plugin = proxy.Plugin{
 				return
 			}
 
-			// Spigot ফরম্যাট: writeUTF("auth_success"), writeUTF(playerUUID)
 			offset := 0
 			subChannel, newOffset, err := readUTF(data, offset)
 			if err != nil {
@@ -177,6 +176,14 @@ var Plugin = proxy.Plugin{
 
 			authMgr.SetAuthenticated(player.Username(), true)
 
+			// অটো-কিক টাইমার শুরু করি
+			time.AfterFunc(kickDelay, func() {
+				p := prx.PlayerByUUID(playerUUID)
+				if p != nil && p.CurrentServer().ServerInfo().Name() == cfg.AuthServer {
+					p.Disconnect(&component.Text{Content: replaceColor(cfg.Messages.AuthKick)})
+				}
+			})
+
 			// লবি বা ফলব্যাকে পাঠানো
 			targets := make([]proxy.RegisteredServer, 0, 1+len(cfg.FallbackServers))
 			if lobby := prx.Server(cfg.LobbyServer); lobby != nil {
@@ -194,6 +201,8 @@ var Plugin = proxy.Plugin{
 					return
 				}
 			}
+
+			// কোনো সার্ভার পেলে কিক টাইমারই প্লেয়ারকে সরিয়ে দেবে
 			_ = player.SendMessage(&component.Text{Content: "§cNo lobby or fallback server is available."})
 		})
 
@@ -201,23 +210,6 @@ var Plugin = proxy.Plugin{
 		event.Subscribe(prx.Event(), 0, func(e *proxy.DisconnectEvent) {
 			authMgr.Remove(e.Player().Username())
 		})
-
-		// /csv reload কমান্ড
-		cmd := brigodier.Literal("csv").
-			Requires(command.Requires(func(c *command.RequiresContext) bool {
-				return c.Source.HasPermission("cloversecurity.reload")
-			})).
-			Executes(command.Command(func(c *command.Context) error {
-				newCfg, err := LoadConfig("plugins/cloversecurity/config.yml")
-				if err != nil {
-					_ = c.Source.SendMessage(&component.Text{Content: "§cFailed to reload configuration!"})
-					return err
-				}
-				cfg = newCfg
-				_ = c.Source.SendMessage(&component.Text{Content: "§aConfiguration reloaded successfully."})
-				return nil
-			}))
-		prx.Command().Register(cmd)
 
 		return nil
 	},
