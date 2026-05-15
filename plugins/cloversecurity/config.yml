@@ -32,11 +32,11 @@
 
 # Authentication server
 # Players will join here first to register/login.
-auth-server: "Auth"
+auth-server: "auth"
 
 # Main lobby server
 # Players are sent here after successful authentication.
-lobby-server: "Lobby"
+lobby-server: "lobby"
 
 # Backup servers
 # Used if the lobby server is unavailable.
