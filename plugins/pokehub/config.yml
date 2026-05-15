@@ -1,0 +1,9 @@
+target-server: "lobby"
+
+messages:
+  player-only: "&cOnly players can use this command."
+  target-missing: "&cThe configured server &e%server%&c is not available."
+  already-there: "&eYou are already on &b%server%&e."
+  transferring: "&aSending you to &e%server%&a..."
+  transferred: "&aSuccessfully moved to &e%server%&a."
+  failed: "&cFailed to connect to &e%server%&c."
