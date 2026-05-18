@@ -37,52 +37,37 @@ func registerCommands(p *proxy.Proxy, log logr.Logger, cfg *Config, storage *Ski
 
 	// Root command: /pokeskin
 	root := brigodier.Literal("pokeskin").
-		Requires(command.Requires(func(c *command.RequiresContext) bool {
-			return c.Source.HasPermission("pokeskins.command.use")
-		})).
 		Executes(command.Command(handler.handleRootHelp()))
 
-	// Subcommand: set <username>
-	setPremium := brigodier.Literal("set").
+	// Combined Subcommand: set
+	// This solves the Brigadier Node Collision by branching both URL and Premium under a single "set" literal.
+	setNode := brigodier.Literal("set").
+		Then(brigodier.Literal("url").
+			Then(brigodier.Argument("url", brigodier.String).
+				Executes(command.Command(handler.handleSetURL())))).
 		Then(brigodier.Argument("username", brigodier.String).
 			Executes(command.Command(handler.handleSetPremium())))
 
-	// Subcommand: set url <url>
-	setURL := brigodier.Literal("set").
-		Then(brigodier.Literal("url").
-			Then(brigodier.Argument("url", brigodier.String).
-				Executes(command.Command(handler.handleSetURL()))))
-
 	// Subcommand: reset
 	reset := brigodier.Literal("reset").
-		Requires(command.Requires(func(c *command.RequiresContext) bool {
-			return c.Source.HasPermission("pokeskins.command.reset")
-		})).
 		Executes(command.Command(handler.handleReset()))
 
 	// Subcommand: info
 	info := brigodier.Literal("info").
-		Requires(command.Requires(func(c *command.RequiresContext) bool {
-			return c.Source.HasPermission("pokeskins.command.info")
-		})).
 		Executes(command.Command(handler.handleInfo()))
 
 	// Subcommand: reload
 	reload := brigodier.Literal("reload").
-		Requires(command.Requires(func(c *command.RequiresContext) bool {
-			return c.Source.HasPermission("pokeskins.admin")
-		})).
 		Executes(command.Command(handler.handleReload()))
 
-	// Assemble command tree
+	// Assemble command tree safely
 	cmd := root.
-		Then(setPremium).
-		Then(setURL).
+		Then(setNode).
 		Then(reset).
 		Then(info).
 		Then(reload)
 
-	// Register with aliases (e.g., pokeskins, pskin)
+	// Register with aliases (e.g., pokeskins, pskins)
 	p.Command().RegisterWithAliases(cmd, cfg.Commands.Aliases...)
 }
 
@@ -196,6 +181,10 @@ func (h *commandHandler) handleReset() func(*command.Context) error {
 			c.Source.SendMessage(legacyText("Only players can use this command."))
 			return nil
 		}
+		if !player.HasPermission("pokeskins.command.reset") {
+			c.Source.SendMessage(legacyText(h.msg("skin_no_permission")))
+			return nil
+		}
 		if err := h.storage.Delete(player.ID().Undashed()); err != nil {
 			c.Source.SendMessage(legacyText(h.msgf("skin_set_fail", err.Error())))
 			return nil
@@ -211,6 +200,10 @@ func (h *commandHandler) handleInfo() func(*command.Context) error {
 		player, ok := c.Source.(proxy.Player)
 		if !ok {
 			c.Source.SendMessage(legacyText("Only players can use this command."))
+			return nil
+		}
+		if !player.HasPermission("pokeskins.command.info") {
+			c.Source.SendMessage(legacyText(h.msg("skin_no_permission")))
 			return nil
 		}
 		pref, exists := h.storage.Get(player.ID().Undashed())

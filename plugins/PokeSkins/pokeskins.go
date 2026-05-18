@@ -48,8 +48,13 @@ var Plugin = proxy.Plugin{
 			mineskin = NewMineSkin(cfg.MineSkin.APIKey, cfg.MineSkin.UploadTimeout)
 		}
 
-		// register commands (using Gate's Brigadier API)
-		registerCommands(p, log, cfg, storage, fetcher, mineskin)
+		// Register commands safely using Gate's Brigadier API only if enabled in config
+		if cfg.Commands.Enabled {
+			registerCommands(p, log, cfg, storage, fetcher, mineskin)
+			log.Info("PokeSkins commands have been registered successfully")
+		} else {
+			log.Info("PokeSkins commands are disabled in config.yml, skipping registration")
+		}
 
 		// subscribe to event for automatic skin application
 		event.Subscribe(p.Event(), 0, func(e *proxy.GameProfileRequestEvent) {
