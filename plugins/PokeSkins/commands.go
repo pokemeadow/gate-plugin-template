@@ -2,7 +2,6 @@ package pokeskins
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/go-logr/logr"
 	"go.minekube.com/brigodier"
@@ -15,10 +14,15 @@ import (
 
 // legacyText converts a string with legacy '&' color codes into a component.
 func legacyText(s string) component.Component {
-	// Replace '&' with '§' (section sign) which is the Minecraft formatting character
-	converted := strings.ReplaceAll(s, "&", "§")
-	// Use the legacy parser to create a component from the formatted string
-	return legacy.ToComponent(converted)
+	leg := legacy.Legacy{
+		Char:    legacy.AmpersandChar, // Use '&' -> '§' conversion.
+		HexChar: legacy.HexChar,       // Handle hex colors like "#FF5555".
+	}
+	comp, err := leg.Unmarshal([]byte(s))
+	if err != nil {
+		return &component.Text{Content: s}
+	}
+	return comp
 }
 
 func registerCommands(p *proxy.Proxy, log logr.Logger, cfg *Config, storage *SkinStorage, fetcher *skinFetcher, mineskin *MineSkin) {
