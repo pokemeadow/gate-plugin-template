@@ -48,7 +48,7 @@ var Plugin = proxy.Plugin{
 			mineskin = NewMineSkin(cfg.MineSkin.APIKey, cfg.MineSkin.UploadTimeout)
 		}
 
-		// register commands (using Gate's command API)
+		// register commands (using Gate's Brigadier API)
 		registerCommands(p, log, cfg, storage, fetcher, mineskin)
 
 		// subscribe to event for automatic skin application
@@ -96,7 +96,7 @@ func onGameProfile(log logr.Logger, cfg *Config, storage *SkinStorage, fetcher *
 		}
 	}
 
-	// no valid preference or fallback: use original Mojang logic (online mode / offline mode)
+	// no valid preference or fallback: use original Mojang logic
 	if e.OnlineMode() {
 		// online mode: only restore if original lacks textures (auth didn't provide)
 		if hasTextures(orig.Properties) {

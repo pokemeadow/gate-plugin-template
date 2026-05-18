@@ -5,12 +5,20 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
+	"go.minekube.com/brigodier"
 	"go.minekube.com/gate/pkg/command"
 	"go.minekube.com/gate/pkg/edition/java/proxy"
+	"go.minekube.com/gate/pkg/util/component"
 	"go.minekube.com/gate/pkg/util/uuid"
 )
 
-// registerCommands builds and registers all commands using Gate's command API.
+// legacyText converts a string with legacy color codes (&) into a component.
+func legacyText(s string) component.Component {
+	// Replace '&' with '§' (section sign) which is the Minecraft formatting character
+	converted := strings.ReplaceAll(s, "&", "§")
+	return component.Text(converted)
+}
+
 func registerCommands(p *proxy.Proxy, log logr.Logger, cfg *Config, storage *SkinStorage, fetcher *skinFetcher, mineskin *MineSkin) {
 	handler := &commandHandler{
 		log:      log,
@@ -21,63 +29,55 @@ func registerCommands(p *proxy.Proxy, log logr.Logger, cfg *Config, storage *Ski
 		proxy:    p,
 	}
 
-	root := command.Literal("pokeskin").
-		Executes(handler.handleHelp) // /pokeskin alone shows help
-
-	// Aliases from config
-	for _, alias := range cfg.Commands.Aliases {
-		root = root.Alias(alias)
-	}
+	// Root command: /pokeskin
+	root := brigodier.Literal("pokeskin").
+		Requires(command.Requires(func(c *command.RequiresContext) bool {
+			return c.Source.HasPermission("pokeskins.command.use")
+		})).
+		Executes(command.Command(handler.handleRootHelp()))
 
 	// Subcommand: set <username>
-	setPremium := command.Literal("set").
-		Then(
-			command.Argument("username", command.String).
-				Executes(handler.handleSetPremium),
-		)
-	root = root.Then(setPremium)
+	setPremium := brigodier.Literal("set").
+		Then(brigodier.Argument("username", brigodier.String).
+			Executes(command.Command(handler.handleSetPremium())))
 
 	// Subcommand: set url <url>
-	setURL := command.Literal("set").
-		Then(
-			command.Literal("url").
-				Then(
-					command.Argument("url", command.String).
-						Executes(handler.handleSetURL),
-				),
-		)
-	root = root.Then(setURL)
+	setURL := brigodier.Literal("set").
+		Then(brigodier.Literal("url").
+			Then(brigodier.Argument("url", brigodier.String).
+				Executes(command.Command(handler.handleSetURL()))))
 
 	// Subcommand: reset
-	reset := command.Literal("reset").
-		Requires(handler.requirePermission("pokeskins.command.reset")).
-		Executes(handler.handleReset)
-	root = root.Then(reset)
-
-	// Subcommand: clear (alias of reset)
-	clear := command.Literal("clear").
-		Requires(handler.requirePermission("pokeskins.command.reset")).
-		Executes(handler.handleReset)
-	root = root.Then(clear)
+	reset := brigodier.Literal("reset").
+		Requires(command.Requires(func(c *command.RequiresContext) bool {
+			return c.Source.HasPermission("pokeskins.command.reset")
+		})).
+		Executes(command.Command(handler.handleReset()))
 
 	// Subcommand: info
-	info := command.Literal("info").
-		Requires(handler.requirePermission("pokeskins.command.info")).
-		Executes(handler.handleInfo)
-	root = root.Then(info)
+	info := brigodier.Literal("info").
+		Requires(command.Requires(func(c *command.RequiresContext) bool {
+			return c.Source.HasPermission("pokeskins.command.info")
+		})).
+		Executes(command.Command(handler.handleInfo()))
 
 	// Subcommand: reload
-	reload := command.Literal("reload").
-		Requires(handler.requirePermission("pokeskins.admin")).
-		Executes(handler.handleReload)
-	root = root.Then(reload)
+	reload := brigodier.Literal("reload").
+		Requires(command.Requires(func(c *command.RequiresContext) bool {
+			return c.Source.HasPermission("pokeskins.admin")
+		})).
+		Executes(command.Command(handler.handleReload()))
 
-	// Subcommand: help
-	help := command.Literal("help").
-		Executes(handler.handleHelp)
-	root = root.Then(help)
+	// Assemble command tree
+	cmd := root.
+		Then(setPremium).
+		Then(setURL).
+		Then(reset).
+		Then(info).
+		Then(reload)
 
-	p.Command().Register(root)
+	// Register with aliases (e.g., pokeskins, pskin)
+	p.Command().RegisterWithAliases(cmd, cfg.Commands.Aliases...)
 }
 
 type commandHandler struct {
@@ -89,150 +89,168 @@ type commandHandler struct {
 	proxy    *proxy.Proxy
 }
 
-func (h *commandHandler) handleHelp(ctx *command.Context) error {
-	return h.sendHelp(ctx)
-}
-
-func (h *commandHandler) handleSetPremium(ctx *command.Context) error {
-	player, ok := ctx.Sender().(proxy.Player)
-	if !ok {
-		return ctx.SendMessage("Only players can use this command.")
-	}
-	if !player.HasPermission("pokeskins.command.set") {
-		return ctx.SendMessage(h.msg("skin_no_permission"))
-	}
-	username := ctx.Arg("username").String()
-	if username == "" {
-		return h.sendHelp(ctx)
-	}
-	ctx.SendMessage(h.msgf("skin_set_username_fetching", username))
-	uid, err := h.fetcher.resolveUUID(username)
-	if err != nil || uid == uuid.Nil {
-		ctx.SendMessage(h.msgf("skin_set_fail", h.msg("skin_not_found")))
+// handleRootHelp shows the help menu when only /pokeskin is typed.
+func (h *commandHandler) handleRootHelp() func(*command.Context) error {
+	return func(c *command.Context) error {
+		h.sendHelp(c)
 		return nil
 	}
-	textures, err := h.fetcher.texturesForUUID(uid)
-	if err != nil {
-		ctx.SendMessage(h.msgf("skin_set_fail", err.Error()))
-		return nil
-	}
-	if len(textures) == 0 {
-		ctx.SendMessage(h.msgf("skin_set_fail", h.msg("skin_not_found")))
-		return nil
-	}
-	pref := SkinPreference{
-		Type:   "premium",
-		Target: username,
-	}
-	if err := h.storage.Set(player.ID().Undashed(), pref); err != nil {
-		ctx.SendMessage(h.msgf("skin_set_fail", err.Error()))
-		return nil
-	}
-	ctx.SendMessage(h.msg("skin_set_success"))
-	return nil
 }
 
-func (h *commandHandler) handleSetURL(ctx *command.Context) error {
-	player, ok := ctx.Sender().(proxy.Player)
-	if !ok {
-		return ctx.SendMessage("Only players can use this command.")
-	}
-	if !player.HasPermission("pokeskins.command.set") {
-		return ctx.SendMessage(h.msg("skin_no_permission"))
-	}
-	if h.mineskin == nil {
-		return ctx.SendMessage(h.msg("skin_api_error"))
-	}
-	urlStr := ctx.Arg("url").String()
-	if urlStr == "" {
-		return h.sendHelp(ctx)
-	}
-	ctx.SendMessage(h.msg("skin_set_url_fetching"))
-	prop, err := h.mineskin.UploadSkinFromURL(urlStr)
-	if err != nil {
-		ctx.SendMessage(h.msgf("skin_set_fail", err.Error()))
+// handleSetPremium processes "/pokeskin set <username>"
+func (h *commandHandler) handleSetPremium() func(*command.Context) error {
+	return func(c *command.Context) error {
+		player, ok := c.Source.(proxy.Player)
+		if !ok {
+			c.Source.SendMessage(legacyText("Only players can use this command."))
+			return nil
+		}
+		if !player.HasPermission("pokeskins.command.set") {
+			c.Source.SendMessage(legacyText(h.msg("skin_no_permission")))
+			return nil
+		}
+		username := c.String("username")
+		if username == "" {
+			h.sendHelp(c)
+			return nil
+		}
+		c.Source.SendMessage(legacyText(h.msgf("skin_set_username_fetching", username)))
+		uid, err := h.fetcher.resolveUUID(username)
+		if err != nil || uid == uuid.Nil {
+			c.Source.SendMessage(legacyText(h.msgf("skin_set_fail", h.msg("skin_not_found"))))
+			return nil
+		}
+		textures, err := h.fetcher.texturesForUUID(uid)
+		if err != nil {
+			c.Source.SendMessage(legacyText(h.msgf("skin_set_fail", err.Error())))
+			return nil
+		}
+		if len(textures) == 0 {
+			c.Source.SendMessage(legacyText(h.msgf("skin_set_fail", h.msg("skin_not_found"))))
+			return nil
+		}
+		pref := SkinPreference{
+			Type:   "premium",
+			Target: username,
+		}
+		if err := h.storage.Set(player.ID().Undashed(), pref); err != nil {
+			c.Source.SendMessage(legacyText(h.msgf("skin_set_fail", err.Error())))
+			return nil
+		}
+		c.Source.SendMessage(legacyText(h.msg("skin_set_success")))
 		return nil
 	}
-	_ = prop // we don't store the property, will re-upload on each join (acceptable for simplicity)
-	pref := SkinPreference{
-		Type:   "url",
-		Target: urlStr,
-	}
-	if err := h.storage.Set(player.ID().Undashed(), pref); err != nil {
-		ctx.SendMessage(h.msgf("skin_set_fail", err.Error()))
+}
+
+// handleSetURL processes "/pokeskin set url <url>"
+func (h *commandHandler) handleSetURL() func(*command.Context) error {
+	return func(c *command.Context) error {
+		player, ok := c.Source.(proxy.Player)
+		if !ok {
+			c.Source.SendMessage(legacyText("Only players can use this command."))
+			return nil
+		}
+		if !player.HasPermission("pokeskins.command.set") {
+			c.Source.SendMessage(legacyText(h.msg("skin_no_permission")))
+			return nil
+		}
+		if h.mineskin == nil {
+			c.Source.SendMessage(legacyText(h.msg("skin_api_error")))
+			return nil
+		}
+		urlStr := c.String("url")
+		if urlStr == "" {
+			h.sendHelp(c)
+			return nil
+		}
+		c.Source.SendMessage(legacyText(h.msg("skin_set_url_fetching")))
+		_, err := h.mineskin.UploadSkinFromURL(urlStr)
+		if err != nil {
+			c.Source.SendMessage(legacyText(h.msgf("skin_set_fail", err.Error())))
+			return nil
+		}
+		pref := SkinPreference{
+			Type:   "url",
+			Target: urlStr,
+		}
+		if err := h.storage.Set(player.ID().Undashed(), pref); err != nil {
+			c.Source.SendMessage(legacyText(h.msgf("skin_set_fail", err.Error())))
+			return nil
+		}
+		c.Source.SendMessage(legacyText(h.msg("skin_set_success")))
 		return nil
 	}
-	ctx.SendMessage(h.msg("skin_set_success"))
-	return nil
 }
 
-func (h *commandHandler) handleReset(ctx *command.Context) error {
-	player, ok := ctx.Sender().(proxy.Player)
-	if !ok {
-		return ctx.SendMessage("Only players can use this command.")
+// handleReset processes "/pokeskin reset"
+func (h *commandHandler) handleReset() func(*command.Context) error {
+	return func(c *command.Context) error {
+		player, ok := c.Source.(proxy.Player)
+		if !ok {
+			c.Source.SendMessage(legacyText("Only players can use this command."))
+			return nil
+		}
+		if err := h.storage.Delete(player.ID().Undashed()); err != nil {
+			c.Source.SendMessage(legacyText(h.msgf("skin_set_fail", err.Error())))
+			return nil
+		}
+		c.Source.SendMessage(legacyText(h.msg("skin_reset_success")))
+		return nil
 	}
-	if !player.HasPermission("pokeskins.command.reset") {
-		return ctx.SendMessage(h.msg("skin_no_permission"))
-	}
-	if err := h.storage.Delete(player.ID().Undashed()); err != nil {
-		return ctx.SendMessage(h.msgf("skin_set_fail", err.Error()))
-	}
-	ctx.SendMessage(h.msg("skin_reset_success"))
-	return nil
 }
 
-func (h *commandHandler) handleInfo(ctx *command.Context) error {
-	player, ok := ctx.Sender().(proxy.Player)
-	if !ok {
-		return ctx.SendMessage("Only players can use this command.")
+// handleInfo processes "/pokeskin info"
+func (h *commandHandler) handleInfo() func(*command.Context) error {
+	return func(c *command.Context) error {
+		player, ok := c.Source.(proxy.Player)
+		if !ok {
+			c.Source.SendMessage(legacyText("Only players can use this command."))
+			return nil
+		}
+		pref, exists := h.storage.Get(player.ID().Undashed())
+		c.Source.SendMessage(legacyText(h.msg("skin_info_title")))
+		if !exists {
+			c.Source.SendMessage(legacyText(h.msg("skin_info_default")))
+		} else if pref.Type == "premium" {
+			c.Source.SendMessage(legacyText(h.msgf("skin_info_custom", "premium", pref.Target)))
+		} else if pref.Type == "url" {
+			c.Source.SendMessage(legacyText(h.msgf("skin_info_custom", "URL", pref.Target)))
+		} else {
+			c.Source.SendMessage(legacyText(h.msg("skin_info_default")))
+		}
+		return nil
 	}
-	pref, exists := h.storage.Get(player.ID().Undashed())
-	ctx.SendMessage(h.msg("skin_info_title"))
-	if !exists {
-		ctx.SendMessage(h.msg("skin_info_default"))
-	} else if pref.Type == "premium" {
-		ctx.SendMessage(h.msgf("skin_info_custom", "premium", pref.Target))
-	} else if pref.Type == "url" {
-		ctx.SendMessage(h.msgf("skin_info_custom", "URL", pref.Target))
-	} else {
-		ctx.SendMessage(h.msg("skin_info_default"))
-	}
-	return nil
 }
 
-func (h *commandHandler) handleReload(ctx *command.Context) error {
-	if !ctx.Sender().HasPermission("pokeskins.admin") {
-		return ctx.SendMessage(h.msg("skin_no_permission"))
+// handleReload processes "/pokeskin reload"
+func (h *commandHandler) handleReload() func(*command.Context) error {
+	return func(c *command.Context) error {
+		newCfg, err := ReloadConfig("plugins/PokeSkins/config.yml")
+		if err != nil {
+			c.Source.SendMessage(legacyText(fmt.Sprintf("&cFailed to reload config: %v", err)))
+			return nil
+		}
+		h.cfg = newCfg
+		c.Source.SendMessage(legacyText(h.msg("reload_success")))
+		return nil
 	}
-	newCfg, err := ReloadConfig("plugins/PokeSkins/config.yml")
-	if err != nil {
-		return ctx.SendMessage(fmt.Sprintf("&cFailed to reload config: %v", err))
-	}
-	h.cfg = newCfg
-	ctx.SendMessage(h.msg("reload_success"))
-	return nil
 }
 
-func (h *commandHandler) sendHelp(ctx *command.Context) error {
-	ctx.SendMessage(h.msg("help_header"))
-	ctx.SendMessage(h.msg("help_set"))
+// sendHelp displays the help menu.
+func (h *commandHandler) sendHelp(c *command.Context) {
+	c.Source.SendMessage(legacyText(h.msg("help_header")))
+	c.Source.SendMessage(legacyText(h.msg("help_set")))
 	if h.mineskin != nil && h.cfg.MineSkin.Enabled {
-		ctx.SendMessage(h.msg("help_set_url"))
+		c.Source.SendMessage(legacyText(h.msg("help_set_url")))
 	}
-	ctx.SendMessage(h.msg("help_reset"))
-	ctx.SendMessage(h.msg("help_info"))
-	if ctx.Sender().HasPermission("pokeskins.admin") {
-		ctx.SendMessage(h.msg("help_reload"))
-	}
-	return nil
-}
-
-func (h *commandHandler) requirePermission(perm string) command.Requirement {
-	return func(ctx *command.Context) bool {
-		return ctx.Sender().HasPermission(perm)
+	c.Source.SendMessage(legacyText(h.msg("help_reset")))
+	c.Source.SendMessage(legacyText(h.msg("help_info")))
+	if c.Source.HasPermission("pokeskins.admin") {
+		c.Source.SendMessage(legacyText(h.msg("help_reload")))
 	}
 }
 
+// msg returns a raw string message from config (still with & codes).
 func (h *commandHandler) msg(key string) string {
 	prefix := h.cfg.Messages["prefix"]
 	msg := h.cfg.Messages[key]
@@ -242,11 +260,7 @@ func (h *commandHandler) msg(key string) string {
 	return prefix + msg
 }
 
+// msgf returns a formatted raw string.
 func (h *commandHandler) msgf(key string, args ...interface{}) string {
-	prefix := h.cfg.Messages["prefix"]
-	msg := h.cfg.Messages[key]
-	if msg == "" {
-		msg = key
-	}
-	return prefix + fmt.Sprintf(msg, args...)
+	return fmt.Sprintf(h.msg(key), args...)
 }
