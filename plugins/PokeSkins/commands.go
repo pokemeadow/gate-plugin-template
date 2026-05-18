@@ -35,7 +35,7 @@ func registerCommands(p *proxy.Proxy, log logr.Logger, cfg *Config, storage *Ski
 		proxy:    p,
 	}
 
-	// Root command: /pokeskin
+	// Root command: /pokeskin (Sobaich use korte parbe default bhabe)
 	root := brigodier.Literal("pokeskin").
 		Executes(command.Command(handler.handleRootHelp()))
 
@@ -56,7 +56,7 @@ func registerCommands(p *proxy.Proxy, log logr.Logger, cfg *Config, storage *Ski
 	info := brigodier.Literal("info").
 		Executes(command.Command(handler.handleInfo()))
 
-	// Subcommand: reload
+	// Subcommand: reload (Execution-e giye admin check hobe)
 	reload := brigodier.Literal("reload").
 		Executes(command.Command(handler.handleReload()))
 
@@ -96,10 +96,9 @@ func (h *commandHandler) handleSetPremium() func(*command.Context) error {
 			c.Source.SendMessage(legacyText("Only players can use this command."))
 			return nil
 		}
-		if !player.HasPermission("pokeskins.command.set") {
-			c.Source.SendMessage(legacyText(h.msg("skin_no_permission")))
-			return nil
-		}
+
+		// Normal player-der jonno open kore dewa hoyeche, kono permission check nai
+
 		username := c.String("username")
 		if username == "" {
 			h.sendHelp(c)
@@ -141,10 +140,9 @@ func (h *commandHandler) handleSetURL() func(*command.Context) error {
 			c.Source.SendMessage(legacyText("Only players can use this command."))
 			return nil
 		}
-		if !player.HasPermission("pokeskins.command.set") {
-			c.Source.SendMessage(legacyText(h.msg("skin_no_permission")))
-			return nil
-		}
+
+		// Normal player-der jonno open kore dewa hoyeche, kono permission check nai
+
 		if h.mineskin == nil {
 			c.Source.SendMessage(legacyText(h.msg("skin_api_error")))
 			return nil
@@ -181,10 +179,9 @@ func (h *commandHandler) handleReset() func(*command.Context) error {
 			c.Source.SendMessage(legacyText("Only players can use this command."))
 			return nil
 		}
-		if !player.HasPermission("pokeskins.command.reset") {
-			c.Source.SendMessage(legacyText(h.msg("skin_no_permission")))
-			return nil
-		}
+
+		// Normal player-der jonno open kore dewa hoyeche, kono permission check nai
+
 		if err := h.storage.Delete(player.ID().Undashed()); err != nil {
 			c.Source.SendMessage(legacyText(h.msgf("skin_set_fail", err.Error())))
 			return nil
@@ -202,10 +199,9 @@ func (h *commandHandler) handleInfo() func(*command.Context) error {
 			c.Source.SendMessage(legacyText("Only players can use this command."))
 			return nil
 		}
-		if !player.HasPermission("pokeskins.command.info") {
-			c.Source.SendMessage(legacyText(h.msg("skin_no_permission")))
-			return nil
-		}
+
+		// Normal player-der jonno open kore dewa hoyeche, kono permission check nai
+
 		pref, exists := h.storage.Get(player.ID().Undashed())
 		c.Source.SendMessage(legacyText(h.msg("skin_info_title")))
 		if !exists {
@@ -224,6 +220,7 @@ func (h *commandHandler) handleInfo() func(*command.Context) error {
 // handleReload processes "/pokeskin reload"
 func (h *commandHandler) handleReload() func(*command.Context) error {
 	return func(c *command.Context) error {
+		// Sudhu eikhane permission safe-guard thakbe strictly admin der jonno
 		if !c.Source.HasPermission("pokeskins.admin") {
 			c.Source.SendMessage(legacyText(h.msg("skin_no_permission")))
 			return nil
@@ -248,6 +245,8 @@ func (h *commandHandler) sendHelp(c *command.Context) {
 	}
 	c.Source.SendMessage(legacyText(h.msg("help_reset")))
 	c.Source.SendMessage(legacyText(h.msg("help_info")))
+
+	// Keble admin holei help menu-te reload command dekhasbe
 	if c.Source.HasPermission("pokeskins.admin") {
 		c.Source.SendMessage(legacyText(h.msg("help_reload")))
 	}
