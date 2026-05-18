@@ -102,9 +102,9 @@ func (s *SkinStorage) load() error {
 }
 
 // save writes current preferences to JSON file.
+// FIXED DEADLOCK: Caller (Set/Delete/Clear) already holds the main Lock.
+// Do NOT call s.mu.RLock() or s.mu.Lock() inside here to prevent proxy freezing.
 func (s *SkinStorage) save() error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	data, err := json.MarshalIndent(s.prefs, "", "  ")
 	if err != nil {
 		return err
@@ -127,7 +127,7 @@ func (s *SkinStorage) cleanupExpired() {
 		for _, uuid := range toDelete {
 			delete(s.prefs, uuid)
 		}
-		_ = s.save() // ignore error on cleanup, log later if needed
+		_ = s.save()
 	}
 }
 

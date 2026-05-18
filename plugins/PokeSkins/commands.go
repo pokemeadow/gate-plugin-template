@@ -40,7 +40,6 @@ func registerCommands(p *proxy.Proxy, log logr.Logger, cfg *Config, storage *Ski
 		Executes(command.Command(handler.handleRootHelp()))
 
 	// Combined Subcommand: set
-	// This solves the Brigadier Node Collision by branching both URL and Premium under a single "set" literal.
 	setNode := brigodier.Literal("set").
 		Then(brigodier.Literal("url").
 			Then(brigodier.Argument("url", brigodier.String).
@@ -97,37 +96,40 @@ func (h *commandHandler) handleSetPremium() func(*command.Context) error {
 			return nil
 		}
 
-		// Normal player-der jonno open kore dewa hoyeche, kono permission check nai
-
 		username := c.String("username")
 		if username == "" {
 			h.sendHelp(c)
 			return nil
 		}
 		c.Source.SendMessage(legacyText(h.msgf("skin_set_username_fetching", username)))
-		uid, err := h.fetcher.resolveUUID(username)
-		if err != nil || uid == uuid.Nil {
-			c.Source.SendMessage(legacyText(h.msgf("skin_set_fail", h.msg("skin_not_found"))))
-			return nil
-		}
-		textures, err := h.fetcher.texturesForUUID(uid)
-		if err != nil {
-			c.Source.SendMessage(legacyText(h.msgf("skin_set_fail", err.Error())))
-			return nil
-		}
-		if len(textures) == 0 {
-			c.Source.SendMessage(legacyText(h.msgf("skin_set_fail", h.msg("skin_not_found"))))
-			return nil
-		}
-		pref := SkinPreference{
-			Type:   "premium",
-			Target: username,
-		}
-		if err := h.storage.Set(player.ID().Undashed(), pref); err != nil {
-			c.Source.SendMessage(legacyText(h.msgf("skin_set_fail", err.Error())))
-			return nil
-		}
-		c.Source.SendMessage(legacyText(h.msg("skin_set_success")))
+
+		// Async block start: run network operations in background
+		go func() {
+			uid, err := h.fetcher.resolveUUID(username)
+			if err != nil || uid == uuid.Nil {
+				c.Source.SendMessage(legacyText(h.msgf("skin_set_fail", h.msg("skin_not_found"))))
+				return
+			}
+			textures, err := h.fetcher.texturesForUUID(uid)
+			if err != nil {
+				c.Source.SendMessage(legacyText(h.msgf("skin_set_fail", err.Error())))
+				return
+			}
+			if len(textures) == 0 {
+				c.Source.SendMessage(legacyText(h.msgf("skin_set_fail", h.msg("skin_not_found"))))
+				return
+			}
+			pref := SkinPreference{
+				Type:   "premium",
+				Target: username,
+			}
+			if err := h.storage.Set(player.ID().Undashed(), pref); err != nil {
+				c.Source.SendMessage(legacyText(h.msgf("skin_set_fail", err.Error())))
+				return
+			}
+			c.Source.SendMessage(legacyText(h.msg("skin_set_success")))
+		}()
+
 		return nil
 	}
 }
@@ -141,8 +143,6 @@ func (h *commandHandler) handleSetURL() func(*command.Context) error {
 			return nil
 		}
 
-		// Normal player-der jonno open kore dewa hoyeche, kono permission check nai
-
 		if h.mineskin == nil {
 			c.Source.SendMessage(legacyText(h.msg("skin_api_error")))
 			return nil
@@ -153,20 +153,25 @@ func (h *commandHandler) handleSetURL() func(*command.Context) error {
 			return nil
 		}
 		c.Source.SendMessage(legacyText(h.msg("skin_set_url_fetching")))
-		_, err := h.mineskin.UploadSkinFromURL(urlStr)
-		if err != nil {
-			c.Source.SendMessage(legacyText(h.msgf("skin_set_fail", err.Error())))
-			return nil
-		}
-		pref := SkinPreference{
-			Type:   "url",
-			Target: urlStr,
-		}
-		if err := h.storage.Set(player.ID().Undashed(), pref); err != nil {
-			c.Source.SendMessage(legacyText(h.msgf("skin_set_fail", err.Error())))
-			return nil
-		}
-		c.Source.SendMessage(legacyText(h.msg("skin_set_success")))
+
+		// Async block start: run URL upload in background
+		go func() {
+			_, err := h.mineskin.UploadSkinFromURL(urlStr)
+			if err != nil {
+				c.Source.SendMessage(legacyText(h.msgf("skin_set_fail", err.Error())))
+				return
+			}
+			pref := SkinPreference{
+				Type:   "url",
+				Target: urlStr,
+			}
+			if err := h.storage.Set(player.ID().Undashed(), pref); err != nil {
+				c.Source.SendMessage(legacyText(h.msgf("skin_set_fail", err.Error())))
+				return
+			}
+			c.Source.SendMessage(legacyText(h.msg("skin_set_success")))
+		}()
+
 		return nil
 	}
 }
@@ -180,13 +185,15 @@ func (h *commandHandler) handleReset() func(*command.Context) error {
 			return nil
 		}
 
-		// Normal player-der jonno open kore dewa hoyeche, kono permission check nai
+		// Run disk operations in background
+		go func() {
+			if err := h.storage.Delete(player.ID().Undashed()); err != nil {
+				c.Source.SendMessage(legacyText(h.msgf("skin_set_fail", err.Error())))
+				return
+			}
+			c.Source.SendMessage(legacyText(h.msg("skin_reset_success")))
+		}()
 
-		if err := h.storage.Delete(player.ID().Undashed()); err != nil {
-			c.Source.SendMessage(legacyText(h.msgf("skin_set_fail", err.Error())))
-			return nil
-		}
-		c.Source.SendMessage(legacyText(h.msg("skin_reset_success")))
 		return nil
 	}
 }
@@ -199,8 +206,6 @@ func (h *commandHandler) handleInfo() func(*command.Context) error {
 			c.Source.SendMessage(legacyText("Only players can use this command."))
 			return nil
 		}
-
-		// Normal player-der jonno open kore dewa hoyeche, kono permission check nai
 
 		pref, exists := h.storage.Get(player.ID().Undashed())
 		c.Source.SendMessage(legacyText(h.msg("skin_info_title")))
@@ -220,7 +225,6 @@ func (h *commandHandler) handleInfo() func(*command.Context) error {
 // handleReload processes "/pokeskin reload"
 func (h *commandHandler) handleReload() func(*command.Context) error {
 	return func(c *command.Context) error {
-		// Sudhu eikhane permission safe-guard thakbe strictly admin der jonno
 		if !c.Source.HasPermission("pokeskins.admin") {
 			c.Source.SendMessage(legacyText(h.msg("skin_no_permission")))
 			return nil
@@ -246,7 +250,6 @@ func (h *commandHandler) sendHelp(c *command.Context) {
 	c.Source.SendMessage(legacyText(h.msg("help_reset")))
 	c.Source.SendMessage(legacyText(h.msg("help_info")))
 
-	// Keble admin holei help menu-te reload command dekhasbe
 	if c.Source.HasPermission("pokeskins.admin") {
 		c.Source.SendMessage(legacyText(h.msg("help_reload")))
 	}
