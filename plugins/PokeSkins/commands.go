@@ -6,17 +6,19 @@ import (
 
 	"github.com/go-logr/logr"
 	"go.minekube.com/brigodier"
+	"go.minekube.com/common/minecraft/component"
+	"go.minekube.com/common/minecraft/component/codec/legacy"
 	"go.minekube.com/gate/pkg/command"
 	"go.minekube.com/gate/pkg/edition/java/proxy"
-	"go.minekube.com/gate/pkg/util/component"
 	"go.minekube.com/gate/pkg/util/uuid"
 )
 
-// legacyText converts a string with legacy color codes (&) into a component.
+// legacyText converts a string with legacy '&' color codes into a component.
 func legacyText(s string) component.Component {
 	// Replace '&' with '§' (section sign) which is the Minecraft formatting character
 	converted := strings.ReplaceAll(s, "&", "§")
-	return component.Text(converted)
+	// Use the legacy parser to create a component from the formatted string
+	return legacy.ToComponent(converted)
 }
 
 func registerCommands(p *proxy.Proxy, log logr.Logger, cfg *Config, storage *SkinStorage, fetcher *skinFetcher, mineskin *MineSkin) {
@@ -225,6 +227,10 @@ func (h *commandHandler) handleInfo() func(*command.Context) error {
 // handleReload processes "/pokeskin reload"
 func (h *commandHandler) handleReload() func(*command.Context) error {
 	return func(c *command.Context) error {
+		if !c.Source.HasPermission("pokeskins.admin") {
+			c.Source.SendMessage(legacyText(h.msg("skin_no_permission")))
+			return nil
+		}
 		newCfg, err := ReloadConfig("plugins/PokeSkins/config.yml")
 		if err != nil {
 			c.Source.SendMessage(legacyText(fmt.Sprintf("&cFailed to reload config: %v", err)))
