@@ -56,14 +56,12 @@ func newSkinFetcher() *skinFetcher {
 			ttlcache.WithTTL[string, uuid.UUID](uuidCacheTTL),
 		),
 	}
-	// start cache goroutines (ttlcache default starter)
 	go f.profileCache.Start()
 	go f.uuidCache.Start()
 	return f
 }
 
-// resolveUUID returns the premium (Mojang) UUID for the given username.
-// It caches results. Returns uuid.Nil if the username has no premium profile.
+// resolveUUID returns premium UUID with caching.
 func (f *skinFetcher) resolveUUID(username string) (uuid.UUID, error) {
 	key := strings.ToLower(strings.TrimSpace(username))
 	if key == "" {
@@ -72,7 +70,7 @@ func (f *skinFetcher) resolveUUID(username string) (uuid.UUID, error) {
 	if item := f.uuidCache.Get(key); item != nil && !item.IsExpired() {
 		return item.Value(), nil
 	}
-	uid, err := f.fetchUsernameToUUIDWithFallback(username)
+	uid, err := f.fetchUsernameToUUIDWithFallback(username) // defined in providers.go
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -80,27 +78,13 @@ func (f *skinFetcher) resolveUUID(username string) (uuid.UUID, error) {
 	return uid, nil
 }
 
-// fetchUsernameToUUIDWithFallback will be implemented in providers.go
-// but we declare it here as a method placeholder; actual implementation uses providers.
-// We'll call the version that includes fallback.
-func (f *skinFetcher) fetchUsernameToUUIDWithFallback(username string) (uuid.UUID, error) {
-	// This will be overridden or implemented in providers.go
-	return f.fetchUsernameToUUID(username)
-}
-
-// fetchUsernameToUUID is a wrapper to call Mojang directly (will be extended in providers).
-func (f *skinFetcher) fetchUsernameToUUID(username string) (uuid.UUID, error) {
-	return f.fetchUUIDMojang(username)
-}
-
-// texturesForUUID returns the "textures" profile properties for the given UUID.
-// Uses cache. Returns nil if the profile has no textures or on error.
+// texturesForUUID returns textures with caching.
 func (f *skinFetcher) texturesForUUID(uid uuid.UUID) ([]profile.Property, error) {
 	key := uid.Undashed()
 	if item := f.profileCache.Get(key); item != nil && !item.IsExpired() {
 		return item.Value(), nil
 	}
-	props, err := f.fetchProfileByUUIDWithFallback(uid)
+	props, err := f.fetchProfileByUUIDWithFallback(uid) // defined in providers.go
 	if err != nil {
 		return nil, err
 	}
@@ -110,16 +94,7 @@ func (f *skinFetcher) texturesForUUID(uid uuid.UUID) ([]profile.Property, error)
 	return props, nil
 }
 
-// fetchProfileByUUIDWithFallback will be implemented in providers.go.
-func (f *skinFetcher) fetchProfileByUUIDWithFallback(uid uuid.UUID) ([]profile.Property, error) {
-	return f.fetchProfileByUUID(uid)
-}
-
-func (f *skinFetcher) fetchProfileByUUID(uid uuid.UUID) ([]profile.Property, error) {
-	return f.fetchProfileMojang(uid)
-}
-
-// fetchUUIDMojang calls Mojang API to get UUID from username.
+// fetchUUIDMojang calls Mojang API.
 func (f *skinFetcher) fetchUUIDMojang(username string) (uuid.UUID, error) {
 	apiURL := fmt.Sprintf(mojangUsernameURL, url.PathEscape(strings.TrimSpace(username)))
 	resp, err := f.client.Get(apiURL)
@@ -128,7 +103,7 @@ func (f *skinFetcher) fetchUUIDMojang(username string) (uuid.UUID, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return uuid.Nil, errRateLimited // errRateLimited defined in providers.go
+		return uuid.Nil, errRateLimited
 	}
 	if resp.StatusCode == http.StatusNoContent {
 		return uuid.Nil, fmt.Errorf("no premium profile for username %q", username)
@@ -143,7 +118,7 @@ func (f *skinFetcher) fetchUUIDMojang(username string) (uuid.UUID, error) {
 	return uuid.Parse(v.ID)
 }
 
-// fetchProfileMojang fetches profile (textures) from Mojang by UUID.
+// fetchProfileMojang fetches textures from Mojang.
 func (f *skinFetcher) fetchProfileMojang(uid uuid.UUID) ([]profile.Property, error) {
 	apiURL := fmt.Sprintf(mojangProfileURL, uid.Undashed())
 	resp, err := f.client.Get(apiURL)

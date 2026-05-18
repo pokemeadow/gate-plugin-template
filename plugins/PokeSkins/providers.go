@@ -30,8 +30,7 @@ func (f *skinFetcher) doReq(apiURL string) (*http.Response, error) {
 
 // --- Username → UUID with fallback ---
 
-// fetchUUIDMojang (already in mojang.go) is used; we add PlayerDB version.
-
+// fetchUUIDPlayerDB gets UUID from PlayerDB.
 func (f *skinFetcher) fetchUUIDPlayerDB(username string) (uuid.UUID, error) {
 	apiURL := fmt.Sprintf(playerdbURL, url.PathEscape(strings.TrimSpace(username)))
 	resp, err := f.doReq(apiURL)

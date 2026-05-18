@@ -48,9 +48,8 @@ var Plugin = proxy.Plugin{
 			mineskin = NewMineSkin(cfg.MineSkin.APIKey, cfg.MineSkin.UploadTimeout)
 		}
 
-		// register commands
-		cmd := newCommands(log, cfg, storage, fetcher, mineskin)
-		cmd.register(p.Command())
+		// register commands (using Gate's command API)
+		registerCommands(p, log, cfg, storage, fetcher, mineskin)
 
 		// subscribe to event for automatic skin application
 		event.Subscribe(p.Event(), 0, func(e *proxy.GameProfileRequestEvent) {
